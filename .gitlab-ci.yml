@@ -1,0 +1,79 @@
+# Build a Docker image with CI/CD and push to the GitLab registry.
+# Docker-in-Docker documentation: https://docs.gitlab.com/ee/ci/docker/using_docker_build.html
+
+# clones all submodules, otherwise they are not present for the build context.
+variables:
+  GIT_SUBMODULE_STRATEGY: recursive
+
+
+stages:
+  - build
+  - documentation
+
+default:
+  interruptible: true
+
+# Rules for when the docker file should be built, they have to be referenced whan they should be applied.
+# ------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+.main_and_dev_commits:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == "main"
+    - if: $CI_PIPELINE_SOURCE == 'merge_request_event'
+    - if: '$CI_PIPELINE_SOURCE == "web"'
+# ------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+# Build the docker image
+# ------------------------------------------------------------------------------------------------------------------------------------------------------------
+docker-build:
+  # Use the official docker image.
+  image: docker:latest
+  stage: build
+  services:
+    - docker:dind
+  before_script:
+    - echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
+  variables:
+    DOCKER_HOST: "tcp://docker:2376"
+    DOCKER_TLS_CERTDIR: "/certs"
+  timeout: 12h
+  rules:
+  - !reference [.main_and_dev_commits, rules]
+
+  # on which runner the docker should be built
+  tags:
+    - sharedrunner-builder-linux 
+
+  # Default branch leaves tag empty (= latest tag)
+  # All other branches are tagged with the escaped branch name (commit ref slug)
+  script:
+    - docker pull "$CI_REGISTRY_IMAGE:$CI_COMMIT_REF_SLUG" || true
+    - docker build --rm --pull --cache-from "$CI_REGISTRY_IMAGE:$CI_COMMIT_REF_SLUG" -t "$CI_REGISTRY_IMAGE:$CI_COMMIT_REF_SLUG" -f docker/Dockerfile .
+    - docker push "$CI_REGISTRY_IMAGE:$CI_COMMIT_REF_SLUG"
+# ------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+# Generate the sphinx documentation
+# ------------------------------------------------------------------------------------------------------------------------------------------------------------
+pages:
+  stage: documentation
+  # Use the build docker image to have all package dependencies
+  image: $CI_REGISTRY_IMAGE:$CI_COMMIT_REF_SLUG
+  # Install sphinx and its dependencies
+  before_script:
+    - pip install --upgrade pip
+    - pip install -U sphinx furo sphinx-rtd-theme sphinx-copybutton numpydoc matplotlib
+  script:
+  # Sphinx crawles through the source code and collects the docstrings
+    - sphinx-apidoc -o docs/source src
+  # Sphinx builds the documentation as html and saves it to the Gitlab-Pages, where it can be inspected
+    - sphinx-build -b html docs/source public
+  artifacts:
+    expose_as: "docs-generated"
+    paths:
+    - public
+  rules:
+    - !reference [.main_and_dev_commits, rules]
+  # on which runner the docker should be built
+  tags:
+    - container-builder-linux
+# ------------------------------------------------------------------------------------------------------------------------------------------------------------

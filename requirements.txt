@@ -1,0 +1,17 @@
+polyscope
+matplotlib
+geopandas
+pyogrio
+numpy
+jupyter
+ipython
+rasterio
+laspy
+scipy
+ipyleaflet
+pyproj
+scikit-learn
+tqdm
+shapely
+py4dgeo
+jupyter
